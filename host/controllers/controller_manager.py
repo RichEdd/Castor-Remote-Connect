@@ -1,14 +1,19 @@
 import platform
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 import pygame
+import json
+import time
 
 class ControllerManager:
     def __init__(self):
         """Initialize the controller manager."""
         self.logger = logging.getLogger('ControllerManager')
         self.running = False
-        self.controllers: Dict[str, pygame.joystick.Joystick] = {}
+        self.local_controllers: Dict[str, pygame.joystick.Joystick] = {}
+        self.remote_controllers: Dict[str, dict] = {}
+        self.controller_mappings: Dict[str, Tuple[str, int]] = {}  # Maps controller_id to (type, port)
+        self.max_ports = 4
         
     def initialize(self):
         """Initialize controller subsystem."""
@@ -30,22 +35,85 @@ class ControllerManager:
         pygame.quit()
         
     def _scan_controllers(self):
-        """Scan for connected controllers."""
+        """Scan for connected local controllers."""
         try:
             # Initialize all connected controllers
             for i in range(pygame.joystick.get_count()):
                 joystick = pygame.joystick.Joystick(i)
                 joystick.init()
-                self.controllers[str(joystick.get_id())] = joystick
-                self.logger.info(f"Found controller: {joystick.get_name()}")
+                controller_id = f"local_{joystick.get_id()}"
+                self.local_controllers[controller_id] = joystick
+                self.logger.info(f"Found local controller: {joystick.get_name()}")
         except Exception as e:
             self.logger.error(f"Error scanning controllers: {e}")
             
+    def add_remote_controller(self, client_id: str, controller_info: dict):
+        """Add a remote controller from a client."""
+        controller_id = f"remote_{client_id}"
+        self.remote_controllers[controller_id] = {
+            'client_id': client_id,
+            'name': controller_info.get('name', 'Unknown Controller'),
+            'last_seen': time.time()
+        }
+        self.logger.info(f"Added remote controller: {controller_info.get('name')} from client {client_id}")
+        
+    def remove_remote_controller(self, client_id: str):
+        """Remove a remote controller."""
+        controller_id = f"remote_{client_id}"
+        if controller_id in self.remote_controllers:
+            del self.remote_controllers[controller_id]
+            # Remove any mappings for this controller
+            for cid, (_, _) in list(self.controller_mappings.items()):
+                if cid == controller_id:
+                    del self.controller_mappings[cid]
+            self.logger.info(f"Removed remote controller from client {client_id}")
+            
+    def map_controller(self, controller_id: str, port: int) -> bool:
+        """
+        Map a controller to a specific port.
+        
+        Args:
+            controller_id: ID of the controller (local_X or remote_X)
+            port: Port number (1-4)
+            
+        Returns:
+            bool: True if mapping was successful
+        """
+        if port < 1 or port > self.max_ports:
+            return False
+            
+        # Check if port is already mapped
+        for cid, (_, p) in self.controller_mappings.items():
+            if p == port:
+                del self.controller_mappings[cid]
+                
+        # Add new mapping
+        controller_type = 'local' if controller_id.startswith('local_') else 'remote'
+        self.controller_mappings[controller_id] = (controller_type, port)
+        self.logger.info(f"Mapped {controller_type} controller {controller_id} to port {port}")
+        return True
+        
+    def unmap_controller(self, controller_id: str) -> bool:
+        """
+        Remove a controller mapping.
+        
+        Args:
+            controller_id: ID of the controller to unmap
+            
+        Returns:
+            bool: True if unmapping was successful
+        """
+        if controller_id in self.controller_mappings:
+            del self.controller_mappings[controller_id]
+            self.logger.info(f"Unmapped controller {controller_id}")
+            return True
+        return False
+        
     def get_controller_state(self, controller_id: str) -> Optional[dict]:
         """Get the current state of a controller."""
         try:
-            if controller_id in self.controllers:
-                joystick = self.controllers[controller_id]
+            if controller_id in self.local_controllers:
+                joystick = self.local_controllers[controller_id]
                 return {
                     'axes': [joystick.get_axis(i) for i in range(joystick.get_numaxes())],
                     'buttons': [joystick.get_button(i) for i in range(joystick.get_numbuttons())],
@@ -56,12 +124,48 @@ class ControllerManager:
             self.logger.error(f"Error getting controller state: {e}")
             return None
             
-    def get_connected_controllers(self) -> List[dict]:
-        """Get list of connected controllers."""
-        return [
-            {
+    def get_available_controllers(self) -> List[dict]:
+        """Get list of all available controllers (local and remote)."""
+        controllers = []
+        
+        # Add local controllers
+        for controller_id, joystick in self.local_controllers.items():
+            controllers.append({
                 'id': controller_id,
-                'name': controller.get_name()
-            }
-            for controller_id, controller in self.controllers.items()
-        ] 
+                'name': joystick.get_name(),
+                'type': 'local',
+                'mapped_port': self.controller_mappings.get(controller_id, (None, None))[1]
+            })
+            
+        # Add remote controllers
+        for controller_id, info in self.remote_controllers.items():
+            controllers.append({
+                'id': controller_id,
+                'name': info['name'],
+                'type': 'remote',
+                'mapped_port': self.controller_mappings.get(controller_id, (None, None))[1]
+            })
+            
+        return controllers
+        
+    def get_mapped_controllers(self) -> Dict[int, dict]:
+        """Get dictionary of port to controller mappings."""
+        mapped = {}
+        for controller_id, (controller_type, port) in self.controller_mappings.items():
+            if controller_type == 'local':
+                controller = self.local_controllers.get(controller_id)
+                if controller:
+                    mapped[port] = {
+                        'id': controller_id,
+                        'name': controller.get_name(),
+                        'type': 'local'
+                    }
+            else:
+                controller = self.remote_controllers.get(controller_id)
+                if controller:
+                    mapped[port] = {
+                        'id': controller_id,
+                        'name': controller['name'],
+                        'type': 'remote'
+                    }
+        return mapped 

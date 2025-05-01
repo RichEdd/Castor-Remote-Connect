@@ -1,13 +1,16 @@
 import asyncio
 import sys
 import logging
-from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QPushButton, QLabel, QComboBox
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
+                            QHBoxLayout, QPushButton, QLabel, QComboBox, 
+                            QGroupBox, QScrollArea)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 import json
 import os
 import socket
 import platform
 import qasync
+from typing import Optional
 
 from host.core.streamer import Streamer
 from host.controllers.controller_manager import ControllerManager
@@ -69,6 +72,11 @@ class HostWindow(QMainWindow):
         self.update_timer.timeout.connect(lambda: asyncio.create_task(self._update_connection_info()))
         self.update_timer.start(1000)  # Update every second
         
+        # Update controller list periodically
+        self.controller_timer = QTimer()
+        self.controller_timer.timeout.connect(self._update_controller_list)
+        self.controller_timer.start(1000)  # Update every second
+        
     def _setup_lan_broadcast(self):
         """Set up periodic LAN broadcast of host information."""
         self.broadcast_timer = QTimer()
@@ -92,46 +100,98 @@ class HostWindow(QMainWindow):
         layout = QVBoxLayout(central_widget)
         
         # Status section
-        status_label = QLabel("Server Status: Running")
-        layout.addWidget(status_label)
+        status_group = QGroupBox("Server Status")
+        status_layout = QVBoxLayout(status_group)
+        
+        status_label = QLabel("Status: Running")
+        status_layout.addWidget(status_label)
         
         # Connection info
         self.connection_info = QLabel()
-        layout.addWidget(self.connection_info)
+        status_layout.addWidget(self.connection_info)
+        
+        layout.addWidget(status_group)
         
         # Controller mapping section
-        controller_label = QLabel("Controller Mapping")
-        layout.addWidget(controller_label)
+        controller_group = QGroupBox("Controller Mapping")
+        controller_layout = QVBoxLayout(controller_group)
         
-        # Controller selection dropdowns
-        self.controller_dropdowns = []
-        for i in range(4):
-            container = QWidget()
-            container_layout = QVBoxLayout(container)
-            
-            port_label = QLabel(f"Port {i+1}:")
-            container_layout.addWidget(port_label)
-            
-            dropdown = QComboBox()
-            dropdown.addItem("No Controller")
-            # TODO: Add detected controllers
-            container_layout.addWidget(dropdown)
-            
-            self.controller_dropdowns.append(dropdown)
-            layout.addWidget(container)
-            
+        # Create scroll area for controller list
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        
+        scroll_widget = QWidget()
+        self.controller_list_layout = QVBoxLayout(scroll_widget)
+        scroll.setWidget(scroll_widget)
+        
+        controller_layout.addWidget(scroll)
+        layout.addWidget(controller_group)
+        
         # Settings section
-        settings_label = QLabel("Stream Settings")
-        layout.addWidget(settings_label)
+        settings_group = QGroupBox("Stream Settings")
+        settings_layout = QVBoxLayout(settings_group)
+        
+        quality_layout = QHBoxLayout()
+        quality_label = QLabel("Stream Quality:")
+        quality_layout.addWidget(quality_label)
         
         quality_dropdown = QComboBox()
         quality_dropdown.addItems(["Low", "Medium", "High"])
         quality_dropdown.currentTextChanged.connect(self._change_quality)
-        layout.addWidget(quality_dropdown)
+        quality_layout.addWidget(quality_dropdown)
+        
+        settings_layout.addLayout(quality_layout)
+        layout.addWidget(settings_group)
         
         # Add stretch to push everything to the top
         layout.addStretch()
         
+    def _update_controller_list(self):
+        """Update the list of available controllers."""
+        # Clear existing controller widgets
+        while self.controller_list_layout.count():
+            item = self.controller_list_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+                
+        # Get available controllers
+        controllers = self.controller_manager.get_available_controllers()
+        
+        # Create widget for each controller
+        for controller in controllers:
+            container = QWidget()
+            container_layout = QHBoxLayout(container)
+            
+            # Controller info
+            info_label = QLabel(f"{controller['name']} ({controller['type']})")
+            container_layout.addWidget(info_label)
+            
+            # Port selection
+            port_dropdown = QComboBox()
+            port_dropdown.addItem("Not Mapped", None)
+            for i in range(1, 5):
+                port_dropdown.addItem(f"Port {i}", i)
+                
+            # Set current port if mapped
+            if controller['mapped_port']:
+                port_dropdown.setCurrentText(f"Port {controller['mapped_port']}")
+                
+            # Connect port change handler
+            port_dropdown.currentIndexChanged.connect(
+                lambda idx, cid=controller['id']: self._handle_port_change(cid, port_dropdown.currentData())
+            )
+            
+            container_layout.addWidget(port_dropdown)
+            self.controller_list_layout.addWidget(container)
+            
+    def _handle_port_change(self, controller_id: str, port: Optional[int]):
+        """Handle controller port mapping change."""
+        if port is None:
+            self.controller_manager.unmap_controller(controller_id)
+        else:
+            self.controller_manager.map_controller(controller_id, port)
+            
     def _handle_frame(self, frame_data: bytes):
         """Handle a new frame from the streamer."""
         # TODO: Send frame to connected clients
@@ -160,6 +220,7 @@ class HostWindow(QMainWindow):
         asyncio.create_task(self.connection_manager.stop())
         self.broadcast_timer.stop()
         self.update_timer.stop()
+        self.controller_timer.stop()
         event.accept()
 
 async def main():
