@@ -7,6 +7,7 @@ import json
 import os
 import socket
 import platform
+import qasync
 
 from host.core.streamer import Streamer
 from host.controllers.controller_manager import ControllerManager
@@ -62,6 +63,11 @@ class HostWindow(QMainWindow):
         
         # Set up LAN broadcast
         self._setup_lan_broadcast()
+        
+        # Update connection info periodically
+        self.update_timer = QTimer()
+        self.update_timer.timeout.connect(lambda: asyncio.create_task(self._update_connection_info()))
+        self.update_timer.start(1000)  # Update every second
         
     def _setup_lan_broadcast(self):
         """Set up periodic LAN broadcast of host information."""
@@ -153,9 +159,10 @@ class HostWindow(QMainWindow):
         self.controller_manager.stop()
         asyncio.create_task(self.connection_manager.stop())
         self.broadcast_timer.stop()
+        self.update_timer.stop()
         event.accept()
 
-def main():
+async def main():
     # Configure logging
     logging.basicConfig(
         level=logging.INFO,
@@ -164,11 +171,18 @@ def main():
     
     # Create application
     app = QApplication(sys.argv)
+    
+    # Create event loop
+    loop = qasync.QEventLoop(app)
+    asyncio.set_event_loop(loop)
+    
+    # Create and show window
     window = HostWindow()
     window.show()
     
-    # Start event loop
-    sys.exit(app.exec())
+    # Run event loop
+    with loop:
+        await loop.run_forever()
 
 if __name__ == "__main__":
-    main() 
+    asyncio.run(main()) 

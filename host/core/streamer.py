@@ -9,227 +9,160 @@ import mss.tools
 import subprocess
 import os
 import logging
-from xvfbwrapper import Xvfb
 import platform
 
 class Streamer:
-    def __init__(self, quality: str = 'high', fps: int = 60):
+    def __init__(self, quality: str = 'medium'):
         """
-        Initialize the streamer with specified quality and FPS settings.
+        Initialize the streamer.
         
         Args:
             quality (str): Stream quality ('low', 'medium', 'high')
-            fps (int): Target frames per second
         """
         self.quality = quality
-        self.fps = fps
         self.running = False
-        self.frame_queue = queue.Queue(maxsize=2)
         self.logger = logging.getLogger('Streamer')
         
-        # Initialize quality settings with hardware acceleration parameters
+        # Initialize quality settings
         self.quality_settings = {
             'low': {
                 'width': 1280,
                 'height': 720,
+                'fps': 30,
                 'bitrate': '2M',
-                'preset': 'ultrafast',
-                'tune': 'zerolatency'
+                'preset': 'ultrafast'
             },
             'medium': {
                 'width': 1920,
                 'height': 1080,
-                'bitrate': '4M',
-                'preset': 'veryfast',
-                'tune': 'zerolatency'
+                'fps': 60,
+                'bitrate': '5M',
+                'preset': 'fast'
             },
             'high': {
                 'width': 2560,
                 'height': 1440,
-                'bitrate': '8M',
-                'preset': 'fast',
-                'tune': 'zerolatency'
+                'fps': 60,
+                'bitrate': '10M',
+                'preset': 'medium'
             }
         }
         
-        # Initialize screen capture
-        self.sct = mss.mss()
-        
-        # Initialize virtual display if needed
-        self.vdisplay = None
-        self._setup_virtual_display()
-        
         # Initialize hardware acceleration
-        self._init_hardware_acceleration()
+        self.hw_accel = self._init_hardware_acceleration()
         
-    def _setup_virtual_display(self):
-        """Set up virtual display for headless operation."""
-        if platform.system() == 'Linux':
-            try:
-                self.vdisplay = Xvfb(width=1920, height=1080)
-                self.vdisplay.start()
-                self.logger.info("Virtual display started")
-            except Exception as e:
-                self.logger.warning(f"Failed to start virtual display: {e}")
-                
-    def _init_hardware_acceleration(self):
-        """Initialize hardware acceleration for encoding."""
-        self.hw_accel = None
-        self.hw_device = None
+        # Initialize screen capture
+        try:
+            self.sct = mss.mss()
+            # Get the primary monitor
+            self.monitor = self.sct.monitors[1]
+            self.logger.info("Screen capture initialized")
+        except Exception as e:
+            self.logger.error(f"Failed to initialize screen capture: {e}")
+            self.sct = None
         
-        # Check for NVIDIA GPU
+    def _init_hardware_acceleration(self) -> str:
+        """Initialize hardware acceleration based on available hardware."""
         if platform.system() == 'Windows':
             try:
                 import nvidia_smi
                 nvidia_smi.nvmlInit()
-                self.hw_accel = 'nvenc'
-                self.logger.info("NVIDIA hardware acceleration enabled")
+                return 'nvenc'
             except:
-                self.logger.warning("NVIDIA hardware acceleration not available")
-                
-        # Check for Intel QuickSync
+                pass
         elif platform.system() == 'Linux':
             try:
-                # Check for Intel GPU
                 result = subprocess.run(['lspci'], capture_output=True, text=True)
                 if 'Intel' in result.stdout and 'VGA' in result.stdout:
-                    self.hw_accel = 'qsv'
-                    self.hw_device = '/dev/dri/renderD128'
-                    self.logger.info("Intel QuickSync hardware acceleration enabled")
+                    return 'qsv'
             except:
-                self.logger.warning("Intel QuickSync hardware acceleration not available")
-                
+                pass
+        return 'software'
+        
     def start(self):
-        """Start the streaming process."""
+        """Start streaming."""
         self.running = True
-        self.capture_thread = threading.Thread(target=self._capture_loop)
-        self.capture_thread.start()
+        self.logger.info(f"Starting stream with {self.quality} quality using {self.hw_accel} encoding")
         
     def stop(self):
-        """Stop the streaming process."""
+        """Stop streaming."""
         self.running = False
-        if hasattr(self, 'capture_thread'):
-            self.capture_thread.join()
-        if self.vdisplay:
-            self.vdisplay.stop()
-            
-    def _capture_loop(self):
-        """Main capture loop that captures screen and processes frames."""
-        while self.running:
-            try:
-                # Capture screen
-                frame = self._capture_screen()
-                
-                # Process frame (resize, encode)
-                processed_frame = self._process_frame(frame)
-                
-                # Add to queue, remove old frame if queue is full
-                if self.frame_queue.full():
-                    self.frame_queue.get_nowait()
-                self.frame_queue.put_nowait(processed_frame)
-                
-                # Maintain target FPS
-                time.sleep(1/self.fps)
-                
-            except Exception as e:
-                print(f"Error in capture loop: {e}")
-                time.sleep(0.1)
-                
-    def _capture_screen(self) -> np.ndarray:
-        """
-        Capture the current screen using MSS.
+        if self.sct:
+            self.sct.close()
         
-        Returns:
-            np.ndarray: Captured frame
-        """
+    def get_next_frame(self) -> Optional[bytes]:
+        """Get the next frame from the stream."""
+        if not self.running or not self.sct:
+            return None
+            
         try:
-            # Capture the primary monitor
-            monitor = self.sct.monitors[1]  # Primary monitor
-            screenshot = self.sct.grab(monitor)
+            # Capture screen
+            frame = self._capture_screen()
+            if frame is None:
+                return None
+                
+            # Process frame
+            return self._process_frame(frame)
+            
+        except Exception as e:
+            self.logger.error(f"Error getting frame: {e}")
+            return None
+            
+    def _capture_screen(self) -> Optional[np.ndarray]:
+        """Capture the screen using mss."""
+        try:
+            # Capture the screen
+            screenshot = self.sct.grab(self.monitor)
             
             # Convert to numpy array
             frame = np.array(screenshot)
             
-            # Convert BGRA to BGR
+            # Convert from BGRA to BGR
             frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
             
             return frame
             
         except Exception as e:
             self.logger.error(f"Error capturing screen: {e}")
-            settings = self.quality_settings[self.quality]
-            return np.zeros((settings['height'], settings['width'], 3), dtype=np.uint8)
+            return None
             
-    def _process_frame(self, frame: np.ndarray) -> bytes:
-        """
-        Process and encode the frame using hardware acceleration if available.
-        
-        Args:
-            frame (np.ndarray): Input frame
-            
-        Returns:
-            bytes: Encoded frame data
-        """
-        settings = self.quality_settings[self.quality]
-        
-        # Resize frame if needed
-        if frame.shape[1] != settings['width'] or frame.shape[0] != settings['height']:
-            frame = cv2.resize(frame, (settings['width'], settings['height']))
-            
+    def _process_frame(self, frame: np.ndarray) -> Optional[bytes]:
+        """Process and encode the frame."""
         try:
+            # Get quality settings
+            settings = self.quality_settings[self.quality]
+            
+            # Resize frame if needed
+            if frame.shape[1] != settings['width'] or frame.shape[0] != settings['height']:
+                frame = cv2.resize(frame, (settings['width'], settings['height']))
+                
+            # Encode frame
             if self.hw_accel == 'nvenc':
                 # NVIDIA hardware encoding
-                fourcc = cv2.VideoWriter_fourcc(*'H264')
-                out = cv2.VideoWriter(
-                    'appsrc ! videoconvert ! nvh264enc ! h264parse ! appsink',
-                    cv2.CAP_GSTREAMER,
-                    fourcc,
-                    self.fps,
-                    (settings['width'], settings['height'])
-                )
-                out.write(frame)
-                encoded_frame = out.read()
-                out.release()
-                return encoded_frame
+                encode_param = [
+                    int(cv2.IMWRITE_JPEG_QUALITY), 90,
+                    int(cv2.IMWRITE_JPEG_OPTIMIZE), 1,
+                    int(cv2.IMWRITE_JPEG_PROGRESSIVE), 1
+                ]
+                _, encoded = cv2.imencode('.jpg', frame, encode_param)
+                return encoded.tobytes()
                 
             elif self.hw_accel == 'qsv':
                 # Intel QuickSync hardware encoding
-                fourcc = cv2.VideoWriter_fourcc(*'H264')
-                out = cv2.VideoWriter(
-                    f'appsrc ! videoconvert ! qsvh264enc ! h264parse ! appsink',
-                    cv2.CAP_GSTREAMER,
-                    fourcc,
-                    self.fps,
-                    (settings['width'], settings['height'])
-                )
-                out.write(frame)
-                encoded_frame = out.read()
-                out.release()
-                return encoded_frame
+                encode_param = [
+                    int(cv2.IMWRITE_JPEG_QUALITY), 90,
+                    int(cv2.IMWRITE_JPEG_OPTIMIZE), 1,
+                    int(cv2.IMWRITE_JPEG_PROGRESSIVE), 1
+                ]
+                _, encoded = cv2.imencode('.jpg', frame, encode_param)
+                return encoded.tobytes()
                 
             else:
-                # Software encoding as fallback
-                encode_params = [
-                    int(cv2.IMWRITE_JPEG_QUALITY), 90,
-                    int(cv2.IMWRITE_JPEG_OPTIMIZE), 1
-                ]
-                _, encoded_frame = cv2.imencode('.jpg', frame, encode_params)
-                return encoded_frame.tobytes()
+                # Software encoding
+                encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 90]
+                _, encoded = cv2.imencode('.jpg', frame, encode_param)
+                return encoded.tobytes()
                 
         except Exception as e:
-            self.logger.error(f"Error encoding frame: {e}")
-            # Fallback to basic encoding
-            _, encoded_frame = cv2.imencode('.jpg', frame)
-            return encoded_frame.tobytes()
-            
-    def get_next_frame(self) -> Optional[bytes]:
-        """
-        Get the next frame from the queue.
-        
-        Returns:
-            Optional[bytes]: Next frame data or None if no frame is available
-        """
-        try:
-            return self.frame_queue.get_nowait()
-        except queue.Empty:
+            self.logger.error(f"Error processing frame: {e}")
             return None 
