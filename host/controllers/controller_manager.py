@@ -14,6 +14,8 @@ class ControllerManager:
         self.remote_controllers: Dict[str, dict] = {}
         self.controller_mappings: Dict[str, Tuple[str, int]] = {}  # Maps controller_id to (type, port)
         self.max_ports = 4
+        self.last_scan_time = 0
+        self.scan_interval = 1.0  # Scan every second
         
     def initialize(self):
         """Initialize controller subsystem."""
@@ -36,14 +38,38 @@ class ControllerManager:
         
     def _scan_controllers(self):
         """Scan for connected local controllers."""
+        if not self.running:
+            return
+            
+        current_time = time.time()
+        if current_time - self.last_scan_time < self.scan_interval:
+            return
+            
+        self.last_scan_time = current_time
+        
         try:
-            # Initialize all connected controllers
+            # Get current connected controller IDs
+            current_controllers = set()
             for i in range(pygame.joystick.get_count()):
                 joystick = pygame.joystick.Joystick(i)
                 joystick.init()
                 controller_id = f"local_{joystick.get_id()}"
-                self.local_controllers[controller_id] = joystick
-                self.logger.info(f"Found local controller: {joystick.get_name()}")
+                current_controllers.add(controller_id)
+                
+                # Add new controllers
+                if controller_id not in self.local_controllers:
+                    self.local_controllers[controller_id] = joystick
+                    self.logger.info(f"Found new local controller: {joystick.get_name()}")
+                    
+            # Remove disconnected controllers
+            for controller_id in list(self.local_controllers.keys()):
+                if controller_id not in current_controllers:
+                    # Unmap the controller if it was mapped
+                    if controller_id in self.controller_mappings:
+                        del self.controller_mappings[controller_id]
+                    del self.local_controllers[controller_id]
+                    self.logger.info(f"Local controller disconnected: {controller_id}")
+                    
         except Exception as e:
             self.logger.error(f"Error scanning controllers: {e}")
             

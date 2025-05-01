@@ -179,7 +179,7 @@ class HostWindow(QMainWindow):
                 
             # Connect port change handler
             port_dropdown.currentIndexChanged.connect(
-                lambda idx, cid=controller['id']: self._handle_port_change(cid, port_dropdown.currentData())
+                lambda idx, cid=controller['id'], dropdown=port_dropdown: self._handle_port_change(cid, dropdown.currentData())
             )
             
             container_layout.addWidget(port_dropdown)

@@ -11,7 +11,30 @@ A high-performance remote desktop application with advanced controller support a
 - Intuitive user interface
 - Cross-platform support
 
-## Requirements
+## For End Users
+
+### Windows
+1. Download the latest release from the releases page
+2. Extract the ZIP file
+3. Run either:
+   - `CastorRemoteConnect-Host.exe` (on the computer you want to control)
+   - `CastorRemoteConnect-Client.exe` (on the computer you want to control from)
+
+### Linux
+1. Download the latest release from the releases page
+2. Extract the ZIP file
+3. Make the executables executable:
+   ```bash
+   chmod +x CastorRemoteConnect-Host
+   chmod +x CastorRemoteConnect-Client
+   ```
+4. Run either:
+   - `./CastorRemoteConnect-Host` (on the computer you want to control)
+   - `./CastorRemoteConnect-Client` (on the computer you want to control from)
+
+## For Developers
+
+### Requirements
 
 - Python 3.8+
 - PyQt6
@@ -19,21 +42,28 @@ A high-performance remote desktop application with advanced controller support a
 - FFmpeg
 - vJoy (for Windows virtual controller support)
 
-## Installation
+### Building from Source
 
-### Host Application
-```bash
-pip install -r requirements.txt
-python host_app.py
-```
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/yourusername/castor-remote-connect.git
+   cd castor-remote-connect
+   ```
 
-### Client Application
-```bash
-pip install -r requirements.txt
-python client_app.py
-```
+2. Install build requirements:
+   ```bash
+   python -m pip install -r requirements.txt
+   python -m pip install pyinstaller
+   ```
 
-## Project Structure
+3. Build the executables:
+   ```bash
+   python build.py
+   ```
+
+4. The executables will be created in the `dist` directory.
+
+### Project Structure
 
 ```
 castor-remote-connect/
